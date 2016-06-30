@@ -1,0 +1,147 @@
+
+1)
+Install Docker in the host VM:
+sudo apt-get install docker.io
+
+Set user:
+sudo usermod -aG docker ega
+
+>Logout
+
+Source EGA codebase files:
+https://github.com/elixir-europe/human-data-local-ega
+
+Extract codebase files:
+cat ega_codebase_v5.tar.gz0* | tar -xzvf -
+
+cd EGA_local
+
+Create  public and private docker data only directories
+docker run -d --name ega-public -v /home/ega/EGA_local/public:/EGA_local/public -v /home/ega/EGA_local/public/submission/ftpusers:/home/ftpusers centos /bin/echo public_data
+
+docker run -d --name ega-private -v /home/ega/EGA_local/private:/EGA_local/private -v /home/ega/EGA_local/private/EGA_pg_database/data:/var/lib/postgresql/data centos /bin/echo private_data
+
+2)
+Set up PostgesSQL database in a docker container:
+docker run -d --name egapro -e POSTGRES_PASSWORD=egapro --volumes-from ega-private postgres
+
+Build Docker Perl image:
+sudo docker build -t ega_perl -f /home/ega/EGA_local/setup_scripts/Dockerfile_Perl .
+
+Create EGA database:
+docker run --rm --link egapro:egapro --name perl --volumes-from ega-private -it ega_perl sh -c 'exec psql -h egapro -p 5432 -U postgres </EGA_local/private/egapro_roles.sql'
+(password: egapro)
+
+Populate EGA database: 
+docker run --rm --link egapro:egapro --name perl --volumes-from ega-private -it ega_perl sh -c 'exec psql -h egapro -p 5432 -U postgres < /EGA_local/private/egapro_v6.sql'
+
+It	is	possible	to	connect	the	‘egapro’	from	the	host	system,	using	a	database	viewer	such	as	DBeaver	(
+http://dbeaver.jkiss.org/files/dbeaver-ce_latest_amd64.deb	
+
+3)
+Create custom CentOS-based Docker Image:	
+sudo docker build -t ega_archive -f /home/ega/EGA_local/setup_scripts/Dockerfile_Archive .
+
+instantiated image into a Container:	
+docker run -d --name archive --volumes-from ega-private --volumes-from ega-public ega_archive
+
+Show webpage
+
+4) 
+Build Docker Image for the API:	
+sudo docker build -t ega_api -f /home/ega/EGA_local/setup_scripts/Dockerfile_API .
+
+instantiate image into the API container:	
+docker run -d --name api --link egapro:egapro --link archive:archive --volumes-from ega-public ega_api
+
+The	API	can	be	monitored: 
+http://172.17.0.4:8103	
+
+5) Add an FTP server
+
+Run Docker container based on	an FTP	Server	Image	available in Docker Hub:	
+docker run -d --name ftpd_server --volumes-from ega-public -p 21:21 -p 30000-30009:30000-30009 -e "PUBLICHOST=localhost" stilliard/pure-ftpd:latest
+
+Create an FTP user:
+
+We	will have to run commands inside of the FTP server container :
+docker exec -it ftpd_server /bin/bash
+
+Create user:
+pure-pw useradd bob -u ftpuser -d /home/ftpusers/bob
+
+<Add password>
+
+pure-pw mkdb 		
+
+<exit>
+
+Test FTP connection:
+docker inspect ftpd_server | grep IPAddress
+
+Should be: "IPAddress": "172.17.0.5"
+
+ftp -d 172.17.0.5
+
+
+6) Test system
+
+Download a test file:
+wget ftp://ftp.sra.ebi.ac.uk/vol1/ERZ015/ERZ015348/ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
+
+Generate unencrypted md5sum:
+md5sum ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz > ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz.md5
+
+Encrypt file:
+gpg --homedir /home/ega/EGA_local/public/config/ -q --passphrase-file /home/ega/EGA_local/public/config/pubring.gpg -r ega-admin@ebi.ac.uk -e ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz
+
+Generate encrypted md5sum:
+md5sum ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz.gpg > ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz.gpg.md5
+
+Upload/submit file:
+
+Using	FTP:	
+ftp -p 172.17.0.5
+
+mput :
+mput ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz*
+
+Archive the submitted file:
+docker run --rm --link egapro:egapro --link archive:archive --name perl --volumes-from ega-private --volumes-from ega-public -it ega_perl sh -c 'exec perl /EGA_local/public/process_file.pl -l /home/ftpusers/bob -f ALL.chr22.integrated_phase1_v3.20101123.snps_indels_svs.genotypes.vcf.gz.gpg -h egapro -u ega_process -P ega_process -d egapro -L /EGA_local/private/archive/ -k mykey
+
+http://172.17.0.3:8103/
+Username: ega
+Password: egalocal
+
+Install JAVA:
+sudo apt-get install openjdk-8-jre
+
+Using the download streamer:
+java -jar /home/ega/EGA_local/public/download/EgaDemoClient.jar -local 172.17.0.4:8111 172.17.0.4:8112
+
+Using the FUSE layer:
+sudo java -jar /home/ega/EGA_local/public/fuse/EgaFUSELayer.jar -m /home/ega/EGA_local/mountpoint/ -u test@ega-demo.org -l /home/ega/EGA_local/public/fuse -p mykey
+
+<New window>
+
+<cd mountpoint>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
